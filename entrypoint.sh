@@ -4,5 +4,6 @@ flask db init
 flask db migrate
 flask db upgrade
 python init_roles.py
+python secret_variables_set.py
 uwsgi -s 0.0.0.0:5555 --wsgi-file /app/app.py --callable app
 #uwsgi -s 0.0.0.0:5555  --lazy-apps --processes 4  --wsgi-file /app/app.py --callable app

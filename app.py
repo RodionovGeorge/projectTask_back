@@ -607,8 +607,20 @@ def date_to_str(d):
 
 
 # API
+"""
+    Соответствие имен исключений и кодов ошибок (и сообщений об ошибках) можно увидеть
+    в файле errors.py. Если в обработчике запроса происходит исключение, то возвращается JSON с полем
+    "message", где сожержится описание ошибки.
+    
+    Константы можно найти в файле constants.py
+"""
 
-
+"""
+    Декоратор, целью которого является проверка сессионного токена у присланного запроса
+    При необнаружении токена кидает ошибку AuthenticationError
+    При ошибке БД кидает ошибку DatabaseError
+    session-token - строка (длина в constants.py)
+"""
 def session_token_check(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -626,6 +638,15 @@ def session_token_check(f):
     return wrapper
 
 
+"""
+    Декоратор, целью которого является проверка CSRF-токена у присланного запроса
+    Он же генерирует новый CSRF-токен при успешной обработке запроса
+    Также обернут в session_decorator
+    При необнаружении CSRF-токена кидает ошибку IncorrectRequestError
+    При обнаружении неверного CSRF-токена кидает ошибку AuthenticationError
+    При ошибке БД кидает DatabaseError
+    csrfToken - строка (длина в constants.py)
+"""
 def csrf_token_check(f):
     @wraps(f)
     @session_token_check
@@ -651,6 +672,10 @@ def csrf_token_check(f):
     return wrapper
 
 
+"""
+    Функция, которая проверяет наличие нужной (переданной в args) роли у пользователя
+    user - объект класса User, args - массив строк
+"""
 def role_check(user, *args):
     for role in user.roles:
         if role.title in args:
@@ -659,8 +684,21 @@ def role_check(user, *args):
 
 
 class Logout(Resource):
+    """
+        Здесь и в дальнейшем эта запись означает применение соотв. декоратора ко всем методам класса
+    """
     method_decorators = [session_token_check]
 
+    """
+        Запрос на выход
+        GET-запрос
+        Требуется:
+            токен сессии в Cookie (имя session-token)
+        При ошибке БД кидает DatabaseError
+        Пример использования: SERVER_IP/api/logout
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def get(*args, **kwargs):
         @after_this_request
         def delete_session_cookie(response):
@@ -682,10 +720,27 @@ class Logout(Resource):
             raise errors.DatabaseError()
 
 
-"""Когда пользователь перезагружает страницу, нужно загрузить данные с сервера по новой (+ обновить cookie)"""
 class RestoreUserData(Resource):
     method_decorators = [session_token_check]
-
+    """
+        Когда пользователь перезагружает страницу, нужно загрузить данные с сервера по новой (+ обновить cookie)
+        GET-запрос
+        Требуется:
+            токен сессии в Cookie (имя session-token)
+        При ошибке БД кидает DatabaseError
+        Пример использования: SERVER_IP/api/restore-data
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+            userData - объект с данными о пользователе, а именно:
+                roles - массив строк, которые содержат названия ролей пользователя
+                id - id пользователя в БД
+                email - email аккаунта пользователя
+                avatarURL - URL аватара для аккаунта,
+                accountActivated - флаг об активации аккаунта,
+                firstName -  строка с именем,
+                middleName - строка с отчеством (может быть пустой),
+                lastName - строка с фамилией
+    """
     def get(*args, **kwargs):
         @after_this_request
         def delete_cookie(response):
@@ -717,6 +772,31 @@ class RestoreUserData(Resource):
 
 
 class Login(Resource):
+    """
+        Запрос на вход на сервис
+        POST-запрос
+        Требуется:
+            JSON с полями:
+                login - строка - почта пользователя
+                password - строка - пароль пользователя
+        Ошибки:
+            IncorrectEmailAddressError - неверный адрес почты (не найден в БД)
+            IncorrectPasswordError - пароль не совпадает с паролем в БД
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/login
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+            csrfToken - string - содержит текущий csrfToken для пользователя
+            userData - объект с данными о пользователе, а именно:
+                roles - массив строк, которые содержат названия ролей пользователя
+                id - id пользователя в БД
+                email - email аккаунта пользователя
+                avatarURL - URL аватара для аккаунта,
+                accountActivated - флаг об активации аккаунта,
+                firstName -  строка с именем,
+                middleName - строка с отчеством (может быть пустой),
+                lastName - строка с фамилией
+    """
     def post(self):
         @after_this_request
         def set_session_cookie(response):
@@ -751,6 +831,26 @@ class Login(Resource):
 
 
 class Registration(Resource):
+    """
+        Запрос на регистрацию пользователя в сервисе
+        POST-запрос
+        Требуется:
+            JSON с полями:
+                lastName - строка - фамилия пользователя
+                firstName - строка - имя пользователя
+                middleName - строка - отчество пользователя
+                email - строка - почта пользователя
+                group - строка - группа (или что-то вместо нее) пользователя
+                password - строка - пароль пользователя
+        Ошибки:
+            UserAlreadyExistsError - повторная попытка зарегистрировать почту (она уже есть в БД)
+            IncorrectEmailAddressError - адрес почты неверен по формату (SMTP ругается)
+            DatabaseError - ошибка в БД
+            SMTPError - общая SMTP ошибка (что угодно)
+        Пример использования: SERVER_IP/api/registration
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def post(self):
         try:
             user_data = request.get_json()
@@ -784,6 +884,21 @@ class Registration(Resource):
 
 
 class ActivatingCodeCheck(Resource):
+    """
+        Второй этап регистрации. Запрос нового кода для активации аккаунта
+        POST-запрос
+        Требуется:
+            JSON с полями:
+                email - строка - адрес почты аккаунта, для которого нужно создать новый код
+        Ошибки:
+            UserAlreadyActivated - аккаунт уже был активирован
+            ARTimeIntervalError - слишком быстро был запрошен новый код
+            DatabaseError - ошибка в БД
+            SMTPError - ошибка при отправке письма (любая)
+        Пример использования: SERVER_IP/api/account-activation
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def post(self):
         try:
             data = request.get_json()
@@ -813,7 +928,23 @@ class ActivatingCodeCheck(Resource):
             raise errors.DatabaseError()
         except SMTPException:
             raise errors.SMTPError()
-
+    """
+        Второй этап регистрации. Активация аккаунта посредством проверки кода с почты
+        PUT-запрос
+        Требуется:
+            JSON с полями:
+                email - строка - почта активируемого аккаунта
+                code - строка - код активации аккаунта
+        Ошибки:
+            UserAlreadyActivated - аккаунт уже был активирован
+            CodeExpiredError - срок действия кода истек
+            ACTimeIntervalError - не прошло необходимое время с предыдущей попытки проверки кода
+            WrongCodeError - прислан неверный код
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/account-activation
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def put(self):
         try:
             data = request.get_json()
@@ -843,11 +974,25 @@ class ActivatingCodeCheck(Resource):
                 raise errors.WrongCodeError()
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
-        except smtplib.SMTPException:
-            raise errors.SMTPError()
 
 
 class RecallPassword(Resource):
+    """
+        Восстановление пароля. Запрос нового кода для восстановления пароля
+        POST-запрос
+        Требуется:
+            JSON с полями:
+                email - строка - почта аккаунта, для которого восстанавливается пароль
+        Ошибки:
+            IncorrectEmailAddressError - аккаунт не найден в БД
+            PRTimeIntervalError - новый код запрошен слишком быстро с предыдущей попытки
+            DatabaseError - ошибка в БД
+            SMTPError - ошибка при отправке письма (любая)
+        Пример использования: SERVER_IP/api/recall-password
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+
+    """
     def post(self):
         try:
             data = request.get_json()
@@ -878,11 +1023,30 @@ class RecallPassword(Resource):
         except SMTPException:
             raise errors.SMTPError()
 
+    """
+        Восстановление пароля. Проверка кода для восстановления пароля
+        PUT-запрос
+        Требуется:
+            JSON с полями:
+                email - строка - почта активируемого аккаунта
+                code - строка - код активации аккаунта
+        Ошибки:
+            IncorrectEmailAddressError - неверный адрес почты (аккаунт не найден)
+            CodeExpiredError - срок действия кода истек
+            PCTimeIntervalError - не прошло необходимое время с предыдущей попытки проверки кода
+            WrongCodeError - прислан неверный код
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/recall-password
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def put(self):
         try:
             data = request.get_json()
             data['email'] = data['email'].lower()
             user = User.query.filter_by(email=data.get('email')).first()
+            if user is None:
+                raise errors.IncorrectEmailAddressError()
             current_time = datetime.datetime.utcnow()
             if current_time > user.new_password_code.expiration_date:
                 raise errors.CodeExpiredError()
@@ -901,16 +1065,31 @@ class RecallPassword(Resource):
                 raise errors.WrongCodeError()
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
-        except smtplib.SMTPException:
-            raise errors.SMTPError()
 
 
 class PasswordChanger(Resource):
+    """
+        Восстановление пароля. Изменение пароля
+        Требуется:
+            JSON с полями:
+                email - строка - почта аккаунта, для которого восстанавливается пароль
+                code - строка - код, который прошел проверку
+                password - строка - новый пароль для аккаунта
+        Ошибки:
+            IncorrectEmailAddressError - неверный адрес почты (аккаунт не найден)
+            PermissionDeniedError - отказ в доступе. Например, если кто-то попытается напрямую обратиться сюда без запроса кода
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/change-password
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def put(self):
         try:
             data = request.get_json()
             data['email'] = data['email'].lower()
             user = User.query.filter_by(email=data.get('email')).first()
+            if user is None:
+                raise errors.IncorrectEmailAddressError()
             if user.new_password_code is None or not bcrypt.check_password_hash(user.new_password_code.code, data.get('code').encode('utf8')):
                 raise errors.PermissionDeniedError()
             user.password = bcrypt.generate_password_hash(data.get('password').encode('utf8')).decode('utf8')
@@ -925,6 +1104,18 @@ class PasswordChanger(Resource):
 
 class AuthenticationCheck(Resource):
     method_decorators = [session_token_check]
+    """
+        Проверка активации аккаунта
+        GET-запрос
+        Требуется:
+            токен сессии в Cookie (имя session-token)
+        Ошибки:
+            см. ошибки в декораторе session_token_check
+        Пример использования: SERVER_IP/api/authentication-check
+        Возвращает JSON с полями:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+            accountActivated - флаг об активации аккаунта  
+    """
 
     def get(*args, **kwargs):
         return {
@@ -933,6 +1124,9 @@ class AuthenticationCheck(Resource):
         }, 200
 
 # file as string in base64
+"""
+    Функция преобразования файла из .tex в .pdf
+"""
 def problem_file_processing(file, file_mime_type):
     try:
         file_data = base64.b64decode(file)
@@ -960,6 +1154,30 @@ def problem_file_processing(file, file_mime_type):
 class AddProblemAPI(Resource):
     method_decorators = [csrf_token_check]
 
+    """
+        Добавление проблемы
+        POST-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            JSON с полями:
+                csrfToken - строка, в которой содержится текущий csrfToken
+                file - строка, в которой закодирован файл в формате base64
+                fileMIMEType - строка с mime-type файла (application/x-tex или application/pdf)
+                userID - id пользователя
+                title - строка с названием задачи
+                discipline - строка с дисциплиной задачи
+                authorCommentary - строка с комментарием автора к задаче
+                startDate - дата начала приема решений
+                endDate - дата окончания приема решений
+        Ошибки:
+            ошибки декоратора csrt_token_decorator
+            PermissionDeniedError - если пользователь не имеет роли "Учитель"
+            TexConversionError - если произошла ошибка при конвертации из tex в pdf
+        Пример использования: SERVER_IP/api/add-problem
+        Возвращает:
+            JSON c полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -982,7 +1200,26 @@ class AddProblemAPI(Resource):
 
 class ProblemEditingAPI(Resource):
     method_decorators = [csrf_token_check]
-
+    """
+        Удаление задачи
+        PUT-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                problemID - id удаляемой задачи
+        Ошибки:
+            ошибки декоратора csrf_token_check
+            IncorrectRequestError - если в запросе не обнаружено id задачи
+            ProblemNotFoundError - если по этому id в БД не была найдена задача
+            PermissionDeniedError - если задача находится под блокировкой администратора / 
+                                    если задачу пытается удалить не автор
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/problem-editing
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def put(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1018,6 +1255,29 @@ class ProblemEditingAPI(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
+    """
+        Редактирование полей задачи
+        PATCH-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                problemID - id редактируемой задачи
+                newStartDate - новая дата начала приема решений
+                newEndDate - новая дата окончания приема решений
+                newCommentary - новый комментарий автора к задаче
+        Ошибки:
+            ошибки декоратора csrf_token_decorator
+            PermissionDeniedError - если пользователь не имеет роли "Учитель" / 
+                                    если задачу нельзя редактировать (она заблокирована)
+            IncorrectRequestError - если что-то из необходимых данных не было обнаружено в JSON
+            ProblemNotFoundError - если по данному id не была найдена задача в БД
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/problem-editing
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def patch(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1159,17 +1419,39 @@ def as_teacher_request_from_db(inf, uid):
     problems = query.offset(page_size * (current_page - 1)).limit(page_size).all()
     return problems, problem_count
 
-
-""" 
-    Для запроса всех задач пользователя как учителя
-    Страница: /my/tasks 
-"""
-
 class AsTeacherGetProblemAPI(Resource):
     method_decorators = {
         'post': [session_token_check]
     }
 
+    """
+        Запрос основной информации о задачах пользователя как учителя
+        POST-запрос
+        Требования:
+            токен сессии в cookie (имя session-token)
+            JSON с полями:
+                currentPage - текущая страница
+                pageSize - размер одной страницы
+                filterField - строка с именем поля, по которому происходит фильтрация
+                    эти имена можно увидеть как ключи в AS_TEACHER_FILTER_QUERIES (это словарик)
+                filterValue - строка со значение фильтра
+        Ошибки:
+            ошибки декоратора session_token_check
+            IncorrectRequestError - если в запросе обнаружены неправильные данные
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/teacher/problems
+        Возвращает: 
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                problems - массив с информацией о задачах, а именно:
+                    problemID - id задачи
+                    problemTitle - строка с названием задачи,
+                    startDate - строка с датой начала приема решений. Формат строки можно посмотреть в функции date_to_str,
+                    endDate - строка с датой окончания приема решений. Формат строки можно посмотреть в функции date_to_str,
+                    problemStatus - строка со статусом задачи,
+                    haveNewContent - количество непроверенных попыток по этой задаче
+                problemCount - общее число найденных задач  
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -1185,7 +1467,6 @@ class AsTeacherGetProblemAPI(Resource):
                     'problemStatus': problem.problem_status.title,
                     'haveNewContent': problem.unchecked_attempt_count
                 })
-            print(problems, problem_count)
             return {
                 'message': 'success',
                 'problems': response_array,
@@ -1194,17 +1475,39 @@ class AsTeacherGetProblemAPI(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
-
-""" 
-    Для запроса всех задач пользователя как ученика
-    Страница: /my/tasks 
-"""
-
 class AsStudentGetProblemsAPI(Resource):
     method_decorators = {
         'post': [session_token_check]
     }
 
+    """
+        Запрос основной информации о задачах пользователя как ученика
+        POST-запрос
+        Требования:
+            токен сессии в cookie (имя session-token)
+            JSON с полями:
+                currentPage - текущая страница
+                pageSize - размер одной страницы
+                filterField - строка с именем поля, по которому происходит фильтрация
+                    эти имена можно увидеть как ключи в AS_STUDENT_FILTER_QUERIES (это словарик)
+                filterValue - строка со значение фильтра
+        Ошибки:
+            ошибки декоратора session_token_check
+            IncorrectRequestError - если в запросе обнаружены неправильные данные
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/student/problems
+        Возвращает: 
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                problems - массив с информацией о задачах, а именно:
+                    problemID - id задачи
+                    problemTitle - строка с названием задачи,
+                    authorFullName - строка с полным сокращенным именем автора задачи,
+                    authorGroup - строка, которая содержит группу автора,
+                    problemDiscipline - строка, которая содержит дисциплину задачи,
+                    haveNewContent - флаг, есть ли непросмотренная информация в этой задаче для ученика
+                problemCount - общее число найденных задач  
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -1234,7 +1537,37 @@ class GeneralProblemAPI(Resource):
         'post': [session_token_check],
         'get': [session_token_check]
     }
-
+    """
+        Запрос всех задач для главной страницы.
+        POST-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            в URL указание -1 (см. пример использования)
+            JSON с полями:
+                currentPage - номер текущей страницы
+                pageSize - размер одной страницы (кол-во записей)
+                filterField - строка с именем поля, по которому идет фильтрация
+                filterValue - строка со значением фильтра
+                sortField - строка с именем поля, по которому идет сортировка
+                sortDirection - строка с указанием, как именно производить сортировку (убыв. или возр.)
+           имена полей можно увидеть в проверочной части функции gp_request_from_db
+        Ошибки:
+            ошибки в декораторе session_token_check
+            IncorrectRequestError - если не подано значение -1 или в JSON найдены некорректные данные
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/problem/-1
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                problems - массив с информацией о задачах, а именно:
+                    problemID - id задачи
+                    problemTitle - строка с названием задачи,
+                    authorGroup - строка, которая содержит группу автора,
+                    authorFullName - строка с полным сокращенным именем автора задачи,
+                    problemDiscipline - строка, которая содержит дисциплину задачи,
+                    problemComplexity - строка, которая содержит сложность задачи
+                problemCount - общее число найденных задач
+    """
     def post(*args, **kwargs):
         try:
             problem_id = kwargs.get('problem_id')
@@ -1260,10 +1593,45 @@ class GeneralProblemAPI(Resource):
                     'problems': response_array,
                     'problemCount': problem_count
                 }, 200
+            else:
+                raise errors.IncorrectRequestError()
         except exc.SQLAlchemyError:
             traceback.print_exc()
             raise errors.DatabaseError()
 
+    """
+        Получение полных данных по конкретной задаче
+        GET-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            в URL указание id задачи (см. пример использования)
+        Ошибки:
+            ошибки в декораторе session_token_check
+            ProblemNotFoundError - если по данному id не удалось найти задачу в БД
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/problem/MtQUG3XdOsT3k7f2CjIe
+                                                   /\                  /\
+                                                   ||                  ||
+                                                     пример id задачи
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - объект с информацией о конкретной задаче, а именно:
+                    userStatus - статус пользователя по отношению к задаче (Ученик, Учитель, Нет (ученик, который еще не начал решать)),
+                    problemStatus - строка со статусом задачи,
+                    problemRejectionReason - строка с комментарием админа по причине отклонения задачи (высылается только автору),
+                    authorFullName - строка с полным именем автора,
+                    authorGroup - строка с группой автора,
+                    authorAvatarPath - строка с URL аватара автора,
+                    authorCommentary - строка с комментарием автора к задаче,
+                    problemID - id задачи,
+                    problemTitle - строка с названием задачи,
+                    problemDiscipline - строка с дисцплиной задачи,
+                    problemComplexity - строка со сложностью задачи (высылается только при наличии),
+                    problemStartLine - строка с датой начала приема решений,
+                    problemDeadline - строка с окончанием приема решений,
+                    problemPath - строка с URL файла с условиями задачи
+    """
     def get(*args, **kwargs):
         try:
             problem_id = kwargs.get('problem_id')
@@ -1307,7 +1675,31 @@ class SessionAPI(Resource):
     method_decorators = {
         'get': [session_token_check]
     }
-
+    """
+        Получить все сессии решений по задаче
+        GET-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            в URL указание id задачи (см. пример использования)
+            в get-параметре прислать значение для фильтрации (имя get-параметра - filterValue)
+        Ошибки:
+            ошибки в декораторе session_token_check
+            IncorrectRequestError - при отсутсвии id задачи или filterValue
+            ProblemNotFoundError - если по id задачи не была найдена ни одна задача в БД
+            PermissionDeniedError - если запрашивает не автор задачи
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/session-for-problem/MtQUG3XdOsT3k7f2CjIe?filterValue=
+        Возвращает:
+            message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+            sessionCount - количество найденных сессий
+            sessionInfo - массив с информацией о сессиях, а именно:
+                sessionID - id сессии,
+                studentFullName - строка с полным именем ученика,
+                studentGroup - строка с группой студента,
+                studentAvatarPath - строка с URL аватара ученика,
+                unverifiedAttemptCount - количество непроверенных попыток для сессии,
+                sessionHasNewCommentariesForTeacher - есть ли новые комментарии от ученика хоть к одной из попыток
+    """
     def get(*args, **kwargs):
         try:
             request_get_args = request.args
@@ -1360,6 +1752,26 @@ class AttemptEditingAPI(Resource):
         'put': [csrf_token_check]
     }
 
+    """
+        Удаление попытки
+        PUT-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                attemptID - id удаляемой попытки
+        Ошибки:
+            ошибки декоратора csrf_token_check
+            IncorrectRequestError - при отсутствии attemptID в JSON
+            AttemptNotFoundError - по id не удалось найти попытку в БД
+            PermissionDeniedError - удалить попытку пытается не ее автор /
+                                    задача имеет статус заблокирована
+            DatabaseError - если происходит ошибка в БД
+        Пример использования: SERVER_IP/api/attempt-editing
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def put(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1392,6 +1804,36 @@ class AttemptEditingAPI(Resource):
             traceback.print_exc()
             raise errors.DatabaseError()
 
+    """
+        Добавление попытки
+        POST-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                file - строка с файлом попытки, который кодирован в base64
+                fileMIMEType - строка с mime-type файла (application/x-tex или application/pdf)
+                problemID - id задачи
+        Ошибки:
+            ошибки декоратора csrf_token_check
+            IncorrectRequestError - если в полученном JSON не хватает данных
+            PermissionDeniedError - если у пользователя нет роли "Ученик" /
+                                    если задача заблокирована админом /
+                                    если задача еще не допущена админом
+            ProblemNotFoundError - если задача не была найдена в БД
+            AttemptCanNotBeAdded - если текущее время не попадает в период приема решений
+            TexConversionError - если произошла ошибка при преобразовании файла из tex в pdf
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/attempt-editing
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                attempt - объект с информацией о попытке, а именно:
+                    fileURL - строка с URL файла попытки,
+                    dateOfLastChange - строка с датой добавления попытки,
+                    status - строка со статусом попытки,
+                    id - id попытки в БД
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1501,6 +1943,38 @@ class ProblemAdmittingAPI(Resource):
         'get': [session_token_check]
     }
 
+    """
+        Получить все задачи, которые требуют допуска.
+        POST-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            в URL указание -1 (см. пример использования)
+            JSON с полями:
+                currentPage - номер текущей страницы
+                pageSize - размер одной страницы (кол-во записей)
+                filterField - строка с именем поля, по которому идет фильтрация
+                filterValue - строка со значением фильтра
+                sortField - строка с именем поля, по которому идет сортировка
+                sortDirection - строка с указанием, как именно производить сортировку (убыв. или возр.)
+           имена полей можно увидеть в проверочной части функции pa_request_from_db
+        Ошибки:
+            ошибки в декораторе session_token_check
+            IncorrectRequestError - если не подано значение -1 или в JSON найдены некорректные данные
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/admitting-problem/-1
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                problems - массив с информацией о задачах, а именно:
+                    problemID - id задачи
+                    problemTitle - строка с названием задачи,
+                    authorGroup - строка, которая содержит группу автора,
+                    authorFirstname - строка с именем автора,
+                    authorLastname - строка с фамилией автора,
+                    problemDeadline - строка с датой окончания приема решений,
+                    problemStartLine - строка с датой начала приема решений,
+                problemCount - общее число найденных задач
+    """
     def post(*args, **kwargs):
         try:
             if not role_check(args[len(args) - 1], 'Администратор', 'Помощник администратора'):
@@ -1527,10 +2001,39 @@ class ProblemAdmittingAPI(Resource):
                     'problems': response_array,
                     'problemCount': problem_count
                 }, 200
+            else:
+                raise errors.IncorrectRequestError()
         except exc.SQLAlchemyError:
             traceback.print_exc()
             raise errors.DatabaseError()
 
+    """
+        Получение данных конкретной задачи для ее допуска
+        GET-запрос
+        Требуется:
+            токен сессии в cookie (имя session-token)
+            в URL указание id задачи (см. пример использования)
+        Ошибки:
+            ошибки в декораторе session_token_check
+            ProblemNotFoundError - если по данному id не удалось найти задачу в БД
+            ProblemAlreadyAdmittedError - задача уже была рассмотрена
+            PermissionDeniedError - если пользователь не является администратором
+            ProblemIsAdmittingNow - Не прошел интервал с предыдущей попытки рассмотрения
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/admitting-problem/KqNODjPX02HnE1AbV69j
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - объект с информацией о конкретной задаче, а именно:
+                    authorFullName - строка с полным именем автора,
+                    authorGroup - строка с группой автора,
+                    authorCommentary - строка с комментарием автора к задаче,
+                    problemTitle - строка с названием задачи,
+                    problemDiscipline - строка с дисцплиной задачи,
+                    problemStartLine - строка с датой начала приема решений,
+                    problemDeadline - строка с окончанием приема решений,
+                    problemURL - строка с URL файла с условиями задачи
+    """
     def get(*args, **kwargs):
         try:
             if not role_check(args[len(args) - 1], 'Администратор', 'Помощник администратора'):
@@ -1564,6 +2067,27 @@ class ProblemAdmittingAPI(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
+    """
+        Запрос на изменение статуса задачи (то есть задача либо была одобрена, либо отклонена)
+        PATCH-запрос
+        Требования:
+            токен сессии в cookie (название аналогично, далее не указывается)
+            JSON с полями:
+              csrfToken - строка с текущим csrf-токеном,
+              problemStatus - строка с итоговым статусом задачи,
+              problemComplexity - строка со сложность задачи (если задача была одобрена),
+              rejectionReason - строка с причиной отклонения задачи (если задача была отклонена)
+        Ошибки:
+            PermissionDeniedError - если пользователь не явялется администратором
+            IncorrectRequestError - если в присланных данных недостаточно информационных полей
+            ProblemNotFoundError - если задача с таким id на была найдена в БД
+            ProblemAlreadyAdmittedError - если эта задача уже была рассмотрена
+            DatabaseError - если произошла ошибка в БД
+        Пример использования: SERVER_IP/api/admitting-problem/some_task_id
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def patch(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1609,7 +2133,20 @@ class RoleCheck(Resource):
     method_decorators = {
         'get': [session_token_check]
     }
-
+    """
+        Запрос для проверки того, что пользователь обладает хотя бы одной ролью из списка
+        GET-запрос
+        Требуется:
+            токен сессии в cookie
+            список ролей в get-параметрах
+        Ошибки:
+            ошибки в декораторе session_token_check
+        Пример использования: /api/role-check?r0=first_role_name&r1=second_role_name
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                roleCheck - флаг будет true, если пользователь имеет хотя бы одну из ролей, в противном случае - false
+    """
     def get(*args, **kwargs):
         request_get_args = request.args
         result = False
@@ -1627,6 +2164,34 @@ class GetAttemptAPI(Resource):
         'get': [session_token_check]
     }
 
+    """
+        Запрос попыток ученика по сессии
+        GET-запрос
+        Требования:
+            токен сессии в cookie
+            id задачи и id сессии в get-параметрах (имена problemID и sessionID соответственно)
+            Пояснение:
+                если sessionID = -1, то это запрос от ученика. И попытки достаются по id задачи и по id пользователя
+                если sessionID != -1, то это запрос от учителя. И попытки достаются по id сессии
+        Ошибки:
+            ошибки в декораторе session_token_check
+            IncorrectRequestError - отсутствие необходимых данных
+            SessionNotFoundError - не удалось получить сессию из БД
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/get-attempt?problemID=-1&sessionID=16
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                sessionStatus - строка со статусом сессии
+                attempts - массив с информацией о попытках, а именно:
+                    studentAttempt - объект с информацией о конкретной попытке, а именно:
+                        fileURL - строка с URL файла попытки,
+                        dateOfLastChange - строка с датой создания попытки,
+                        status - строка со статусом попытки,
+                        id - id попытки в БД
+                    attemptHasNewCommentary - флаг, есть ли новые комментарии для пользователя
+                    teacherFeedbackStatus - строка со статусом ответа учителя (высылается только при наличии, в противном случае - пустая строка)
+    """
     def get(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -1664,6 +2229,37 @@ class GetAttemptAPI(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
+    """
+        Запрос ответа на попытку от учителя и комментариев к конкретной попытке
+        POST-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                attemptID - id попытки в БД
+        Ошибки:
+            ошибки в декораторе session_token_check
+            IncorrectRequestError - отсутсвует необходимая информация
+            AttemptNotFoundError - попытку не удалось достать из БД по этому id
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/get-attempt
+        Возвращается:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                attempt - объект с информацией о попытке, а именно:
+                    teacherFeedback - объект с информацией об отзыве учителя (если есть, иначе - None), а именно:
+                        id - id отзыва в БД,
+                        decisionStage - строка со степенью решения задачи,
+                        checkDate - строка с датой отзыва,
+                        problemFileURL - строка с URL файла отзыва,
+                        teacherCommentary - строка с комментарием автора к отзыву
+                    teacherFeedbackStatus - строка со статусом отзыва преподавателя (если отзыв есть, иначе пустая строка)
+                    sessionStatus - флаг, есть ли еще попытки, где учитель не посмотрел комментарии
+                    commentaries - массив с информацией о комментариях, а именно:
+                        commentaryID - id комментария в БД,
+                        commentaryText - текст комментария (строка),
+                        commentaryDate - строка с датой комментария,
+                        authorID - id пользователя, кто является автором комментария                        
+    """
     def post(*args, **kwargs):
         try:
             data = request.get_json()
@@ -1719,6 +2315,28 @@ class AttemptCheckAPI(Resource):
         'put': [csrf_token_check]
     }
 
+    """
+        Удаление отзыва
+        PUT-запрос
+        Требования:
+            токен сессии в cookie
+            -1 в конце URL (см. пример)
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                attemptID - id удаляемой попытки
+        Ошибки:
+            ошибки в декораторе csrf_token_check
+            IncorrectRequestError - отсутсвует необходимая информация
+            PermissionDeniedError - удалить пытается не автор отзыва /
+                                    задача заблокирована админом /
+                                    сессия заблокирована админом
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/check-attempt/-1
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                studentAttemptStatus - строка с новым статусом попытки ученика
+    """
     def put(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1750,6 +2368,31 @@ class AttemptCheckAPI(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
+    """
+        Запрос на добавление отзыва
+        POST-запрос
+        Требования:
+            токен сессии в cookie
+            id попытки в URL
+            JSON c полями:
+                pages - массив страниц (png), кодированных в base64
+                teacherCommentary - строка с комментарией учителя
+                solutionDegree - строка со стадией решения задачи
+                csrfToken - строка с текущим csrf-токеном
+                status - строка, является ли это сохранение черновиком или нет
+        Ошибки:
+            ошибки декоратора csrf_token_check
+            AttemptNotFoundError - попытка не была найдена по присланному id
+            PermissionDeniedError - добавить отзыв пытается не автор задачи /
+                                    задача или сессия были заблокированы админом
+            IncorrectRequestError - отсутсвует необходимая информация
+            DatabaseError - ошибка в БД
+            PDFFromPNGError - ошибка при преобразовании png в pdf
+        Пример использования: SERVER_IP/api/check-attempt/12345
+        Возвращает:
+              JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению  
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1805,12 +2448,35 @@ class AttemptCheckAPI(Resource):
             traceback.print_exc()
             raise errors.PDFFromPNGError()
 
+    """
+        Запрос на начало проверки попытки
+        GET-запрос
+        Требования:
+            токен сессии в cookie
+            id попытки в URL
+        Ошибки:
+            ошибки декоратора session_token_check
+            AttemptNotFoundError - попытка не найдена по данном id
+            PermissionDeniedError - если пользователь не является автором задачи или он не имеет роли "Учитель"
+            DatabaseError - ошибка в БД
+        Пример вызова: SERVER_IP/api/check-attempt/12345
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                imagePaths - массив строк, в которых записаны URL страниц файла-попытки
+                problemPath - строка с URL файла-условий задачи
+                authorInf - объект с информацией об авторе попытке, а именно:
+                    authorFullName - строка с полным именем автора попытки
+                    authorAvatarPath - строка с URL аватарки автора попытки
+                    authorGroup - строка с группой автора попытки
+                authorCommentary - строка с комментарием автора (отправляется при наличии черновика, иначе - пустая строка)
+                solutionDegree - строка со степенью решения задачи (отправляется при наличии черновика, иначе - пустая строка)
+    """
     def get(*args, **kwargs):
         try:
             del_image_paths = []
             user = args[-1]
             attempt_id = kwargs.get('attempt_id')
-            print(attempt_id)
             attempt = Attempt.query.filter_by(id=attempt_id).first()
             if attempt is None:
                 raise errors.AttemptNotFoundError()
@@ -1859,6 +2525,26 @@ class CommentaryAPI(Resource):
         'put': [csrf_token_check]
     }
 
+    """
+        Удаление комментария
+        PUT-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                commentaryID - id удаляемого комментария
+        Ошибки:
+            ошибки в декораторе csrf_token_check
+            IncorrectRequestError - отсутсвует необходимая информация
+            CommentaryNotFoundError - комментарий не был найден по присланному id
+            PermissionDeniedError - удалить комментарий пытается не его автор / 
+                                    задача или сессия были заблокированы админом
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/commentary-editing
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def put(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1884,12 +2570,35 @@ class CommentaryAPI(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
+    """
+        Добавить комментарий
+        POST-запрос
+        Требования:
+            токен сессии в cookie
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                attemptID - id попытки, к которой добавляется комментарий
+                commentaryText - строка, в которой содержится текст комментария
+        Ошибки:
+            ошибки в декораторе csrf_token_check
+            IncorrectRequestError - отсутсвует необходимая информация
+            AttemptNotFoundError - попытка по данному id не найдена
+            PermissionDeniedError - задача или сессия заблокированы админом / 
+                                    комментарий пытается добавить не учитель и не ученик
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/commentary-editing
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                commentaryID - id комментария в БД
+                commentaryTime - строка с датой добавления комментария
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 2]
             data = args[len(args) - 1]
             attempt_id = data.get('attemptID')
-            if attempt_id is None:
+            if attempt_id is None or data.get('commentaryText') is None:
                 raise errors.IncorrectRequestError()
             attempt = Attempt.query.filter_by(id=attempt_id).first()
             if attempt is None:
@@ -1900,7 +2609,7 @@ class CommentaryAPI(Resource):
                 raise errors.PermissionDeniedError()
             student_id = attempt.session.student_id
             author_id = attempt.session.problem.author_id
-            if user.id != student_id and user.id != author_id and attempt.student_attempt.attempt_number != attempt.session.current_attempt:
+            if user.id != student_id and user.id != author_id:
                 raise errors.PermissionDeniedError()
             new_commentary = Commentary(data.get('commentaryText'), user.id == author_id)
             user.commentaries.append(new_commentary)
@@ -1922,7 +2631,27 @@ class HideStatusAPI(Resource):
     method_decorators = {
         'patch': [csrf_token_check]
     }
-
+    """
+        Скрытие или открытие задачи
+        PATCH-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                problemID - id задачи в БД
+                newStatusTitle - строка с новым статусом задачи (Принята или Скрыта)
+        Ошибки:
+            ошибки в декораторе csrf_token_check
+            IncorrectRequestError - отсутсвует необходимая информация
+            ProblemNotFoundError - проблема по данному id не найдена
+            PermissionDeniedError - задача заблокирована админом
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/hide-status
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                newStatus - строка с новым статусом задачи
+    """
     def patch(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -1971,6 +2700,35 @@ class AdminGetUser(Resource):
         'post': [session_token_check]
     }
 
+    """
+        Получение всех пользователей, зарегестрированных на сервисе
+        POST-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                filterValue - строка со значением фильтра
+                filterField - строка с именем поля по которому идет фильтрация
+                currentPage - номер текущей страницы
+                pageSize - размер одной страницы (кол-во записей)
+        Ошибки:
+            ошибки декоратора session_token_check
+            PermissionDeniedError - если пользователь не админ
+            IncorrectRequestError - отсутсвует необходимая информация
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/users
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - массив с информацией о пользователях, а именно:
+                    userID - id пользователя в БД,
+                    userFullName - полное имя пользователя (строка),
+                    userGroup - строка с группой пользователя,
+                    studentRole - флаг, имеет ли пользователь роль "Ученик",
+                    teacherRole - флаг, имеет ли пользователь роль "Учитель",
+                    adminRole - флаг, имеет ли пользователь роль "Администратор",
+                    subAdminRole - флаг, имеет ли пользователь роль "Помощник администратора"
+                count - количество всех найденных пользователей                  
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2014,7 +2772,29 @@ class AdminGetProblem(Resource):
     method_decorators = {
         'post': [session_token_check]
     }
-
+    """
+        Запрос всех задач, которые есть на сервисе
+        POST-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                filterValue - строка со значением фильтра
+                filterField - строка с именем поля по которому идет фильтрация
+                currentPage - номер текущей страницы
+                pageSize - размер одной страницы (кол-во записей)
+        Ошибки аналогичны предыдущему запросу
+        Пример использования: SERVER_IP/api/admin/problems
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - массив с информацией о задачах, а именно:
+                    problemID - id задачи в БД,
+                    problemTitle - строка с названием задачи,
+                    authorFullName - строка с полным именем автора задачи,
+                    authorGroup - строка с группой автора задачи,
+                    problemDiscipline - строка с дисциплиной задачи
+                count - количество всех найденных задач                  
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2132,6 +2912,29 @@ class AdminChangeRole(Resource):
     method_decorators = {
         'patch': [session_token_check]
     }
+    """
+        Изменение ролей у пользователей
+        PATCH-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                roleTitle - строка с названием роли
+                mode - установить роль или убрать ее (up, down)
+                targetID - id пользователя
+        Ошибки:
+            PermissionDeniedError - запрос послан не админом /
+                                    установить роль "Администратор" таким способом нельзя /
+                                    помощники администратора не могу распоряжаться ролью "Помощник администратора"
+            IncorrectRequestError - отсутсвует необходимая информация /
+                                    присутствует некорректная информация /
+                                    Администратор не может быть и помощником администратора одновременно
+            UserNotFound - пользователь с таким id не найден
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/change-role
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def patch(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2301,7 +3104,27 @@ class AdminStatistic(Resource):
     method_decorators = {
         'post': [session_token_check]
     }
-
+    """
+        Сбор статистики
+        POST-запрос
+        Требуется:
+            токен сессии
+            JSON с полями:
+                mode - строка, котороя отображает цель для статистики (problem or user)
+                id - id цели
+                startDate - начальная дата для интервала сбора статистики
+                endDate - конечная дата для интервала сбора статистики
+        Ошибки:
+            PermissionDeniedError - запрос прислан не от лица админа
+            IncorrectRequestError - отсутсвует необходимая информация
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/get-statistic
+        Возвращается:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - объект со статистикой, зависит от значения mode.
+                        конкретные форматы можно увидеть в трех функциях выше
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2337,7 +3160,26 @@ class AdminGetAllSessionsByStudent(Resource):
         'post': [session_token_check],
         'get': [session_token_check]
     }
-
+    """
+        Получить информацию об ученике, по которому запрашиваются сессии
+        GET-запрос
+        Требуется:
+            токен сессии в cookie
+            id ученика в URL
+        Ошибки:
+            ошибки декоратора session_token_check
+            PermissionDeniedError - запрос пришел не от админа
+            UserNotFound - по данному id не был найден пользователь
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/get-session?12345
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - объект с данными об ученике, а именно:
+                    avatarPath - строка с URL аватара ученика
+                    fullName - строка с полным именем ученика
+                    group - строка с группой ученика
+    """
     def get(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2358,6 +3200,36 @@ class AdminGetAllSessionsByStudent(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
+    """
+        Вернуть все сессии по данному ученику
+        POST-запрос
+        Требуется:
+            токен сессии в cookie
+            id ученика в URL
+            JSON с полями:
+                currentPage - текущая страница
+                pageSize - размер одной страницы
+                filterField - строка с именем поля, по которому происходит фильтрация
+                    эти имена можно увидеть как ключи в AS_STUDENT_FILTER_QUERIES (это словарик)
+                filterValue - строка со значение фильтра
+        Ошибки:
+            PermissionDeniedError - запрос прислан не админом
+            UserNotFound - пользователь с таким id не был найден
+            ошибки в функции as_student_request_from_db
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/get-sessions/12345
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - массив объектов с информацие о сессиях ученика, а именно:
+                    sessionID - id сессии в БД,
+                    problemID - id задачи, к которой принаждежит сессия, в БД,
+                    problemTitle - название задачи,
+                    authorFullName - строка с полным именем автора задачи
+                    authorGroup - строка с группой автора,
+                    problemDiscipline - строка с дисциплиной задачи
+                count - общее число найденных сессий
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2392,7 +3264,35 @@ class AdminGetAllProblemsByTeacher(Resource):
     method_decorators = {
         'post': [session_token_check]
     }
-
+    """
+        Получить все задачи, которые предложил пользователь
+        POST-запрос
+        Требуется:
+            токен сессии в cookie
+            id пользователя в URL
+            JSON с полями:
+                currentPage - текущая страница
+                pageSize - размер одной страницы
+                filterField - строка с именем поля, по которому происходит фильтрация
+                    эти имена можно увидеть как ключи в AS_TEACHER_FILTER_QUERIES (это словарик)
+                filterValue - строка со значение фильтра 
+        Ошибки:
+            PermissionDeniedError - запрос прислан не от лица админа
+            UserNotFound - пользователь с таким id не был найден
+            ошибки из функции as_teacher_request_from_db
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/get-problems/12345
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - массив объектов с информацие о задачах, а именно:
+                    problemID - id задачи в БД,
+                    problemTitle - название задачи,
+                    startDate - строка с датой начала приема решений по данной задаче,
+                    endDate - строка с датой окончания приема решений по данной задаче,
+                    problemStatus - строка со статусом данной задачи
+                count - общее число найденных задач
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2431,7 +3331,10 @@ class AdminGetSessionsByProblem(Resource):
     method_decorators = {
         'get': [session_token_check]
     }
-
+    """
+        Аналог метода GET для администрирования. См. класс SessionAPI, метод get
+        Пример использования:  SERVER_IP/api/admin/get-sessions-by-problem/1234?filterValue=123
+    """
     def get(*args, **kwargs):
         try:
             request_get_args = request.args
@@ -2484,7 +3387,10 @@ class AdminGetSession(Resource):
         'get': [session_token_check],
         'post': [session_token_check]
     }
-
+    """
+        Аналог запросов из класса GetAttemptAPI.
+        В get-запросе сессия запрошивается только по sessionID
+    """
     def get(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2545,7 +3451,9 @@ class AdminGetProblemInformation(Resource):
     method_decorators = {
         'get': [session_token_check]
     }
-
+    """
+        Аналог метода get из класса GeneralProblemAPI
+    """
     def get(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2653,6 +3561,25 @@ class AdminTargetDeleting(Resource):
         'put': [csrf_token_check]
     }
 
+    """
+        Удаление сущности (задачи, попытки, отзыва на попытку, комментария)
+        PUT-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                targetID - id целевой сущности
+                targetMode - строка с указанием конкретной сущности ('problem','student attempt','teacher feedback','commentary')
+        Ошибки:
+            PermissionDeniedError - запрос не от админа
+            IncorrectRequestError - отсутствует необходимая информация
+            удаляющие методы могут порождать ошибки. См. функции выше
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/delete-target
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def put(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -2680,7 +3607,23 @@ class AdminInformation(Resource):
         'get': [session_token_check],
         'post': [csrf_token_check]
     }
-
+    """
+        Получить справочную страницу из БД
+        GET-запрос
+        Требуется:
+            токен сессии в cookie
+            label в get-параметре ('userHelp' не требует прав админа, 'adminHelp' - требует прав админа)
+        Ошибки:
+            IncorrectRequestError - отсутствует необходимая информация
+            PermissionDeniedError - в случае adminHelp пришел запрос не от админа
+            InformationNotFound - для данного label не найдена информация
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/information?label=adminHelp
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                information - строку, которая содержит html-верстку справочной информации
+    """
     def get(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2699,7 +3642,26 @@ class AdminInformation(Resource):
             }, 200
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
-
+    """
+        Редактирование справки
+        POST-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                label - какую справку редактируем (см. get-запрос)
+                        для редактирования обязательны права админа
+                text - строка с новой html-версткой справки
+        Ошибки:
+            PermissionDeniedError - запрос пришел не от админа
+            IncorrectRequestError - отсутствует необходимая информация
+            InformationNotFound - по данному label не найдена запись в БД
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/information
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -2729,6 +3691,22 @@ class ProblemDisciplineAPI(Resource):
         'put': [csrf_token_check]
     }
 
+    """
+        Запрос предварительно введенных возможных дисциплин для задач
+        GET-запрос
+        Требуется:
+            токен сессии в cookie
+        Ошибки:
+            PermissionDeniedError - если пользователь не имеет роли "Учитель"
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/problem-discipline
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                data - массив информации о таких дисциплинах, а именно:
+                    id - id дисциплины в БД,
+                    label - название дисциплины
+    """
     def get(*args, **kwargs):
         try:
             user = args[len(args) - 1]
@@ -2745,6 +3723,24 @@ class ProblemDisciplineAPI(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
+    """
+        Добавление новой возможной дисциплины
+        POST-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                label - название новой дисциплины
+        Ощибки:
+            PermissionDeniedError - запрос прислан на админом
+            IncorrectRequestError - отсутствуют необходимые данные
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/problem-discipline
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+                id - id новой возможной дисциплины
+    """
     def post(*args, **kwargs):
         try:
             user = args[len(args) - 2]
@@ -2766,6 +3762,24 @@ class ProblemDisciplineAPI(Resource):
         except exc.SQLAlchemyError:
             raise errors.DatabaseError()
 
+    """
+        Удаление возможной дисциплины
+        PUT-запрос
+        Требуется:
+            токен сессии в cookie
+            JSON с полями:
+                csrfToken - строка с текущим csrf-токеном
+                id - id дисциплины в БД
+        Ощибки:
+            PermissionDeniedError - запрос прислан на админом
+            IncorrectRequestError - отсутствуют необходимые данные
+            ProblemDisciplineNotFound - возможная дисциплина с таким id не найдена
+            DatabaseError - ошибка в БД
+        Пример использования: SERVER_IP/api/admin/problem-discipline
+        Возвращает:
+            JSON с полями:
+                message - string - содержит success при успехе, в случае ошибки - специальную строку, соотв. исключению
+    """
     def put(*args, **kwargs):
         try:
             user = args[len(args) - 2]
